@@ -3,87 +3,103 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>SOLMAR — Open World</title>
+<title>Costa Luna — Make GTA 6</title>
 <style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0e14; font-family: 'Segoe UI', Arial, sans-serif; }
-  #game-canvas { display: block; width: 100%; height: 100%; touch-action: none; }
-  #hud { display: none; position: fixed; inset: 0; pointer-events: none; z-index: 5; color: #fff; }
-  #money { position: absolute; top: 14px; right: 18px; font-size: 30px; font-weight: 800; color: #7dff8a; text-shadow: 2px 2px 0 #000, 0 0 12px rgba(0,0,0,.7); }
-  #stars { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); font-size: 30px; letter-spacing: 4px; text-shadow: 2px 2px 0 #000; }
-  #objective { position: absolute; top: 56px; left: 50%; transform: translateX(-50%); font-size: 16px; font-weight: 600; background: rgba(0,0,0,.55); padding: 7px 16px; border-radius: 20px; border: 1px solid rgba(255,211,25,.6); white-space: nowrap; }
-  #timer { position: absolute; top: 96px; left: 50%; transform: translateX(-50%); font-size: 20px; font-weight: 800; color: #ffd319; text-shadow: 2px 2px 0 #000; }
-  #toast { position: absolute; top: 150px; left: 50%; transform: translateX(-50%); font-size: 22px; font-weight: 800; color: #ffd319; text-shadow: 2px 2px 0 #000; opacity: 0; transition: opacity .4s; text-align: center; }
-  #healthWrap { position: absolute; left: 18px; bottom: 196px; width: 190px; }
-  #healthWrap label { font-size: 12px; font-weight: 700; letter-spacing: 2px; text-shadow: 1px 1px 0 #000; }
-  #healthBar { height: 12px; background: rgba(0,0,0,.6); border: 1px solid #fff; border-radius: 6px; overflow: hidden; margin-top: 2px; }
-  #healthFill { height: 100%; width: 100%; background: #37c26a; }
-  #healthNum { font-size: 12px; font-weight: 700; text-shadow: 1px 1px 0 #000; }
-  #minimap { position: absolute; left: 14px; bottom: 14px; width: 168px; height: 168px; border: 2px solid rgba(255,255,255,.75); border-radius: 50%; box-shadow: 0 0 0 3px rgba(0,0,0,.5); }
-  #speed { display: none; position: absolute; right: 20px; bottom: 20px; text-align: right; text-shadow: 2px 2px 0 #000; }
-  #speed b { font-size: 52px; font-weight: 800; }
-  #speed span { font-size: 15px; font-weight: 700; color: #ffd319; }
-  #help { position: absolute; right: 18px; bottom: 110px; font-size: 12px; color: rgba(255,255,255,.75); text-shadow: 1px 1px 0 #000; text-align: right; line-height: 1.6; }
-  .overlay { display: none; position: fixed; inset: 0; z-index: 10; align-items: center; justify-content: center; flex-direction: column; text-align: center; color: #fff; background: linear-gradient(180deg, rgba(10,10,26,.82), rgba(60,10,60,.78)); }
-  .overlay h1 { font-size: 84px; font-weight: 900; letter-spacing: 8px; background: linear-gradient(180deg, #ffe95e, #ff7a2e 55%, #ff2e88); -webkit-background-clip: text; background-clip: text; color: transparent; text-shadow: 0 4px 30px rgba(255,46,136,.35); }
-  .overlay h2 { font-size: 15px; letter-spacing: 6px; color: #7dff8a; margin: 2px 0 18px; }
-  .overlay p { max-width: 640px; font-size: 16px; line-height: 1.65; color: #e8e8f0; padding: 0 20px; }
-  .overlay button { pointer-events: auto; margin-top: 26px; padding: 15px 46px; font-size: 19px; font-weight: 800; letter-spacing: 2px; color: #111; background: linear-gradient(180deg, #ffd319, #ff9a2e); border: none; border-radius: 40px; cursor: pointer; box-shadow: 0 6px 24px rgba(255,150,40,.5); }
-  .overlay button:hover { transform: translateY(-2px); }
-  .overlay button.ghost { background: transparent; color: #fff; border: 2px solid #fff; box-shadow: none; margin-top: 12px; padding: 11px 34px; font-size: 15px; }
-  #overTitle.wasted { color: #ff3333; -webkit-text-fill-color: #ff3333; background: none; }
-  #overTitle.busted { color: #4da6ff; -webkit-text-fill-color: #4da6ff; background: none; }
-  #overStats { font-size: 18px; line-height: 1.9; margin-top: 10px; }
-  #overStats b { color: #ffd319; }
-  #loading { position: fixed; inset: 0; z-index: 20; display: flex; align-items: center; justify-content: center; background: #0a0e14; color: #ffd319; font-size: 18px; letter-spacing: 3px; }
+  html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #0a1420; font-family: 'Segoe UI', Arial, sans-serif; }
+  #app { position: fixed; inset: 0; }
+  canvas.game { display: block; width: 100%; height: 100%; }
+  .panel { position: absolute; color: #fff; text-shadow: 0 2px 4px rgba(0,0,0,.7); user-select: none; pointer-events: none; }
+  #objective { top: 14px; left: 14px; max-width: 340px; background: rgba(8, 18, 30, .55); border-left: 4px solid #ffd23e; border-radius: 4px; padding: 10px 12px; }
+  #objective .m-title { font-size: 15px; font-weight: 700; letter-spacing: .5px; }
+  #objective .m-desc { font-size: 13px; opacity: .92; margin-top: 3px; line-height: 1.35; }
+  #objective .m-timer { font-size: 15px; font-weight: 700; color: #ffd23e; margin-top: 4px; }
+  #stats { top: 14px; right: 14px; text-align: right; }
+  #money { font-size: 26px; font-weight: 800; color: #7dff8a; }
+  #stars { font-size: 24px; letter-spacing: 2px; margin-top: 2px; color: #ffd23e; }
+  #stars .off { color: rgba(255,255,255,.28); }
+  #healthbar { width: 170px; height: 10px; background: rgba(0,0,0,.55); border: 1px solid rgba(255,255,255,.5); border-radius: 5px; margin-top: 6px; margin-left: auto; overflow: hidden; }
+  #healthfill { height: 100%; width: 100%; background: linear-gradient(90deg, #37d67a, #a5e34a); }
+  #minimapWrap { left: 14px; bottom: 14px; background: rgba(8, 18, 30, .55); border: 1px solid rgba(255,255,255,.35); border-radius: 6px; padding: 5px; }
+  #minimap { display: block; border-radius: 4px; }
+  #speedo { right: 16px; bottom: 14px; text-align: right; }
+  #speed { font-size: 34px; font-weight: 800; }
+  #speed small { font-size: 13px; font-weight: 600; opacity: .8; }
+  #gear { font-size: 13px; opacity: .85; }
+  #banner { top: 22%; left: 50%; transform: translateX(-50%); text-align: center; font-size: 34px; font-weight: 900; letter-spacing: 2px; opacity: 0; transition: opacity .3s; }
+  #banner .sub { font-size: 16px; font-weight: 600; letter-spacing: 1px; margin-top: 4px; }
+  #toast { bottom: 110px; left: 50%; transform: translateX(-50%); font-size: 15px; background: rgba(8,18,30,.7); padding: 8px 16px; border-radius: 20px; opacity: 0; transition: opacity .25s; white-space: nowrap; }
+  #compass { top: 64px; left: 50%; transform: translateX(-50%); font-size: 22px; color: #ffd23e; text-shadow: 0 0 8px rgba(0,0,0,.9); }
+  #compass .dist { font-size: 13px; color: #fff; }
+  #vignette { position: absolute; inset: 0; pointer-events: none; opacity: 0; background: radial-gradient(ellipse at center, transparent 55%, rgba(200,0,0,.55) 100%); transition: opacity .2s; }
+  .overlay { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; color: #fff; text-align: center; background: linear-gradient(180deg, rgba(6,14,26,.82), rgba(6,14,26,.68)); z-index: 10; }
+  .overlay h1 { font-size: 64px; margin: 0; letter-spacing: 4px; font-weight: 900; background: linear-gradient(180deg, #ffe98a, #ff9d2e); -webkit-background-clip: text; background-clip: text; color: transparent; text-shadow: none; }
+  .overlay h2 { font-size: 15px; font-weight: 600; letter-spacing: 6px; margin: 6px 0 18px; opacity: .85; }
+  .overlay p { max-width: 560px; font-size: 15px; line-height: 1.55; opacity: .92; margin: 0 0 14px; }
+  .overlay .controls { font-size: 13px; line-height: 1.9; background: rgba(255,255,255,.08); border-radius: 8px; padding: 12px 22px; margin-bottom: 20px; }
+  .overlay .controls b { color: #ffd23e; }
+  button.big { pointer-events: auto; cursor: pointer; font-size: 19px; font-weight: 800; letter-spacing: 1px; color: #10200f; background: linear-gradient(180deg, #8dff7a, #37c24a); border: 0; border-radius: 8px; padding: 13px 42px; box-shadow: 0 4px 0 #1e7a2e, 0 8px 18px rgba(0,0,0,.5); }
+  button.big:hover { filter: brightness(1.08); }
+  button.big.ghost { background: rgba(255,255,255,.14); color: #fff; box-shadow: none; border: 1px solid rgba(255,255,255,.4); font-size: 15px; padding: 10px 26px; margin-top: 10px; }
+  .hidden { display: none !important; }
+  #endTitle { font-size: 56px; font-weight: 900; letter-spacing: 3px; margin: 0; }
+  #endTitle.wasted { color: #ff5a4e; } #endTitle.busted { color: #6db3ff; } #endTitle.legend { color: #ffd23e; }
+  #endStats { font-size: 15px; line-height: 1.9; margin: 12px 0 20px; opacity: .95; }
+  #hint { bottom: 14px; left: 50%; transform: translateX(-50%); font-size: 12.5px; opacity: .75; background: rgba(0,0,0,.45); padding: 5px 12px; border-radius: 12px; }
 </style>
+<script type="importmap">
+{ "imports": { "three": "./vendor/three.module.min.js" } }
+</script>
 </head>
 <body>
-<div id="loading">LOADING SOLMAR…</div>
-<canvas id="game-canvas"></canvas>
-
-<div id="hud">
-  <div id="money">$0</div>
-  <div id="stars">☆☆☆☆☆</div>
-  <div id="objective"></div>
-  <div id="timer"></div>
-  <div id="toast"></div>
-  <div id="healthWrap"><label>HEALTH <span id="healthNum">100</span></label><div id="healthBar"><div id="healthFill"></div></div></div>
-  <canvas id="minimap" width="168" height="168"></canvas>
-  <div id="speed"><b>0</b><br><span>KM/H</span></div>
-  <div id="help">WASD move / drive · Shift run<br>E enter car · F punch · Space handbrake<br>Drag mouse to look · Esc pause · M mute</div>
+<div id="app"></div>
+<div id="vignette"></div>
+<div id="objective" class="panel hidden">
+  <div class="m-title" id="objTitle">COSTA LUNA</div>
+  <div class="m-desc" id="objDesc"></div>
+  <div class="m-timer hidden" id="objTimer"></div>
 </div>
+<div id="stats" class="panel hidden">
+  <div id="money">$0</div>
+  <div id="stars"></div>
+  <div id="healthbar"><div id="healthfill"></div></div>
+</div>
+<div id="compass" class="panel hidden">▲ <span class="dist" id="compassDist"></span></div>
+<div id="minimapWrap" class="panel hidden"><canvas id="minimap" width="190" height="190"></canvas></div>
+<div id="speedo" class="panel hidden"><div id="speed">0 <small>mph</small></div><div id="gear"></div></div>
+<div id="banner" class="panel"></div>
+<div id="toast" class="panel"></div>
+<div id="hint" class="panel hidden">WASD move &nbsp;·&nbsp; E steal car &nbsp;·&nbsp; Space handbrake &nbsp;·&nbsp; F punch &nbsp;·&nbsp; P pause &nbsp;·&nbsp; M mute</div>
 
 <div id="menu" class="overlay">
-  <h1 id="menuTitle">SOLMAR</h1>
-  <h2>AN OPEN-WORLD STORY · SOLMAR COAST</h2>
-  <p id="menuBody"></p>
-  <button id="menuBtn">START THE STORY</button>
-  <button id="menuBtn2" class="ghost">NEW GAME</button>
+  <h1>COSTA LUNA</h1>
+  <h2>AN OPEN-WORLD CRIME STORY</h2>
+  <p>Marco rolls into Costa Luna with empty pockets and a fast right foot. Luna, the
+  fixer, has five jobs for him — steal cars, run packages, outrun the law, and pull
+  the big score. The city is yours: drive it, walk it, and try not to get busted.</p>
+  <div class="controls">
+    <b>WASD</b> move / drive &nbsp;·&nbsp; <b>drag mouse</b> camera &nbsp;·&nbsp; <b>Shift</b> run<br>
+    <b>E</b> steal / enter car &nbsp;·&nbsp; <b>Space</b> handbrake drift &nbsp;·&nbsp; <b>F</b> punch<br>
+    <b>P</b> pause &nbsp;·&nbsp; <b>M</b> mute &nbsp;·&nbsp; <b>R</b> restart
+  </div>
+  <button class="big" id="btnStart">START ENGINE</button>
+  <button class="big ghost hidden" id="btnContinue">CONTINUE — MISSION <span id="contMission">1</span></button>
 </div>
 
-<div id="pause" class="overlay">
-  <h1 style="font-size:54px">PAUSED</h1>
-  <p>Take a breath, Leo. The city will wait.</p>
-  <button id="pauseBtn">RESUME</button>
+<div id="pauseMenu" class="overlay hidden">
+  <h1 style="font-size:44px">PAUSED</h1>
+  <p>Take a breath. Costa Luna waits.</p>
+  <button class="big" id="btnResume">RESUME</button>
+  <button class="big ghost" id="btnRestart">RESTART RUN</button>
+  <button class="big ghost" id="btnQuit">QUIT TO MENU</button>
 </div>
 
-<div id="over" class="overlay">
-  <h1 id="overTitle">WASTED</h1>
-  <div id="overStats"></div>
-  <button id="overBtn">PLAY AGAIN</button>
+<div id="endScreen" class="overlay hidden">
+  <div id="endTitle">WASTED</div>
+  <div id="endStats"></div>
+  <button class="big" id="btnRetry">TRY AGAIN</button>
+  <button class="big ghost" id="btnEndMenu">BACK TO MENU</button>
 </div>
 
-<script src="vendor/three.min.js"></script>
-<script src="src/util.js"></script>
-<script src="src/audio.js"></script>
-<script src="src/effects.js"></script>
-<script src="src/city.js"></script>
-<script src="src/vehicles.js"></script>
-<script src="src/player.js"></script>
-<script src="src/police.js"></script>
-<script src="src/missions.js"></script>
-<script src="src/hud.js"></script>
-<script src="src/main.js"></script>
+<script type="module" src="./src/main.js"></script>
 </body>
 </html>
