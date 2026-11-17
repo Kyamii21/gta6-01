@@ -1,265 +1,220 @@
-// Solmar — missions and the story: five jobs for Leo Marin, from his first
-// stolen car to the Solmar Score, each with steps, a 3D beacon, a timer
-// where it matters, and a cash payout.
+// Five jobs for Luna the fixer, played in order: steal a car, run a package,
+// outrun the law, race the beach road, and pull the big score. Each mission
+// is a chain of stages with a 3D beacon marking the target.
+import * as THREE from 'three';
+import { dist2d } from './rng.js';
 
-const SOLMAR_MISSIONS = [
+// Mission targets (x, z) in world coordinates.
+const SPOTS = {
+  sportsCar: { x: 6, z: -14 },
+  garage: { x: -86, z: -86 },
+  pierEnd: { x: 48, z: 290 },
+  gazebo: { x: -120, z: -28 }, // on the park path, clear of the gazebo posts
+  bank: { x: 40, z: -24 },
+  hideout: { x: -196, z: 196 },
+  beachCp: [
+    { x: -180, z: 252 }, { x: -90, z: 252 }, { x: 0, z: 252 },
+    { x: 90, z: 252 }, { x: 180, z: 252 },
+  ],
+};
+
+const MISSIONS = [
   {
-    id: 'wheels',
-    title: 'Wheels Up',
-    intro: 'Mama Rosa needs wheels. Get in any car and bring it to Spray & Shine.',
-    reward: 150,
-    steps: [
-      { type: 'enterCar', text: 'Steal a car — press E next to one' },
-      { type: 'goto', target: 'paintShop', radius: 9, text: 'Drive to Spray & Shine' },
-    ],
-  },
-  {
-    id: 'drop',
-    title: 'The Drop',
-    intro: 'A package is waiting in Palm Park. Grab it and run it to the Docks before the buyer walks.',
+    id: 'wheels', title: 'MISSION 1 — FIRST WHEELS',
+    desc: 'Luna needs a driver. Steal the red sports car by the garage, then bring it to the lockup.',
     reward: 300,
-    steps: [
-      { type: 'goto', target: 'park', radius: 6, text: 'Pick up the package in Palm Park' },
-      { type: 'goto', target: 'docks', radius: 10, text: 'Deliver to the Docks', time: 150 },
+    stages: [
+      { label: 'Steal the red sports car (E to enter)', target: SPOTS.sportsCar, radius: 4, need: 'car' },
+      { label: 'Drive the car to the lockup', target: SPOTS.garage, radius: 8, need: 'drive' },
     ],
   },
   {
-    id: 'pursuit',
-    title: 'Hot Pursuit',
-    intro: 'The cops are on you, Leo. Lose them — lay low until the heat dies down.',
-    reward: 400,
-    steps: [
-      { type: 'wanted', stars: 2, text: 'Get the cops off your tail' },
-      { type: 'survive', time: 45, text: 'Stay out of sight — heat cooling down' },
-    ],
-  },
-  {
-    id: 'beach',
-    title: 'Beachcomber',
-    intro: 'Six crates washed up on the beach after last night’s storm. Collect them all.',
+    id: 'courier', title: 'MISSION 2 — COURIER RUN',
+    desc: 'A package is waiting on the pier. Grab it and get it to the park gazebo — 90 seconds, no excuses.',
     reward: 500,
-    steps: [
-      { type: 'collect', target: 'beach', count: 6, radius: 130, text: 'Collect the washed-up crates (0/6)' },
+    stages: [
+      { label: 'Pick up the package on the pier', target: SPOTS.pierEnd, radius: 5, need: 'reach' },
+      { label: 'Deliver to the park gazebo', target: SPOTS.gazebo, radius: 7, need: 'reach', timer: 90 },
     ],
   },
   {
-    id: 'score',
-    title: 'The Solmar Score',
-    intro: 'The big one. Hit Solmar National Bank, grab the loot, and get back to Leo’s Place alive.',
+    id: 'getaway', title: 'MISSION 3 — GETAWAY',
+    desc: 'The cops are onto you — 3 stars. Stay free for 45 seconds. Do not get busted.',
+    reward: 800,
+    stages: [
+      { label: 'Lose the cops — stay free for 45 seconds', target: null, radius: 0, need: 'survive', timer: 45 },
+    ],
+  },
+  {
+    id: 'beach', title: 'MISSION 4 — BEACH DASH',
+    desc: 'A rival crew races the beach road. Hit all 5 checkpoints before the clock runs out.',
+    reward: 900,
+    stages: SPOTS.beachCp.map((cp, i) => ({
+      label: `Checkpoint ${i + 1} of 5 — beach road`, target: cp, radius: 8, need: 'drive', timer: i === 0 ? 75 : 0,
+    })),
+  },
+  {
+    id: 'score', title: 'MISSION 5 — THE BIG SCORE',
+    desc: 'The bank on Meridian Avenue. Walk in, grab the cash, and get to the hideout with the whole city on your tail.',
     reward: 2500,
-    steps: [
-      { type: 'goto', target: 'bank', radius: 10, text: 'Get to Solmar National Bank' },
-      { type: 'hold', target: 'bank', time: 5, text: 'Hold E to crack the vault' },
-      { type: 'goto', target: 'safehouse', radius: 9, text: 'Escape to Leo’s Place!', wanted: 3 },
+    stages: [
+      { label: 'Get to the bank (on foot)', target: SPOTS.bank, radius: 7, need: 'reach' },
+      { label: 'Grab the cash — stay in the vault', target: SPOTS.bank, radius: 7, need: 'hold', holdTime: 3 },
+      { label: 'Escape to the hideout', target: SPOTS.hideout, radius: 9, need: 'reach' },
     ],
   },
 ];
 
-class SolmarMissions {
-  constructor(game) {
-    this.game = game;
-    this.index = 0;
-    this.stepIndex = 0;
-    this.active = false;
-    this.stepTimer = 0;
-    this.holdTimer = 0;
-    this.collectibles = [];
-    this.beacon = null;
-    this.marker = null;
-    this.onMissionComplete = null;
-    this.onStepChange = null;
-    this.onStoryComplete = null;
-    this._buildBeacon();
+function makeBeacon(scene) {
+  const group = new THREE.Group();
+  group.visible = false;
+  const beamMat = new THREE.MeshBasicMaterial({ color: 0xffd23e, transparent: true, opacity: 0.22, side: THREE.DoubleSide, depthWrite: false });
+  const beam = new THREE.Mesh(new THREE.CylinderGeometry(2.2, 2.2, 60, 12, 1, true), beamMat);
+  beam.position.y = 30;
+  group.add(beam);
+  const gem = new THREE.Mesh(
+    new THREE.OctahedronGeometry(1.6),
+    new THREE.MeshBasicMaterial({ color: 0xffd23e }),
+  );
+  gem.position.y = 7;
+  gem.name = 'gem';
+  group.add(gem);
+  const ring = new THREE.Mesh(
+    new THREE.RingGeometry(3, 4.2, 24),
+    new THREE.MeshBasicMaterial({ color: 0xffd23e, transparent: true, opacity: 0.8, side: THREE.DoubleSide }),
+  );
+  ring.rotation.x = -Math.PI / 2;
+  ring.position.y = 0.15;
+  group.add(ring);
+  scene.add(group);
+  return group;
+}
+
+export function createMissionSystem(scene) {
+  return {
+    scene,
+    index: 0, // next mission to start (0..5); 5 means all done
+    stage: 0,
+    timer: 0,
+    hold: 0,
+    active: false,
+    done: false,
+    beacon: makeBeacon(scene),
+    pulse: 0,
+  };
+}
+
+export function currentMission(sys) {
+  return sys.index < MISSIONS.length ? MISSIONS[sys.index] : null;
+}
+
+export function currentStage(sys) {
+  const m = currentMission(sys);
+  return m ? m.stages[sys.stage] : null;
+}
+
+export function startMission(sys, index, ctx) {
+  sys.index = index;
+  sys.stage = 0;
+  sys.active = true;
+  sys.done = false;
+  sys.hold = 0;
+  const m = MISSIONS[index];
+  const stage = m.stages[0];
+  sys.timer = stage.timer || 0;
+  if (m.id === 'getaway') ctx.setWanted(3);
+  if (m.id === 'score') ctx.toast('The bank job. No turning back now.');
+  updateBeacon(sys);
+  return m;
+}
+
+function updateBeacon(sys) {
+  const stage = currentStage(sys);
+  if (!sys.active || !stage || !stage.target) {
+    sys.beacon.visible = false;
+    return;
   }
+  sys.beacon.visible = true;
+  sys.beacon.position.set(stage.target.x, 0, stage.target.z);
+}
 
-  _buildBeacon() {
-    const g = new THREE.Group();
-    const beamMat = new THREE.MeshBasicMaterial({ color: 0xffd319, transparent: true, opacity: 0.28, depthWrite: false, side: THREE.DoubleSide });
-    const beam = new THREE.Mesh(new THREE.CylinderGeometry(2.2, 2.2, 60, 12, 1, true), beamMat);
-    beam.position.y = 30;
-    g.add(beam);
-    const diamondMat = new THREE.MeshBasicMaterial({ color: 0xffd319 });
-    const diamond = new THREE.Mesh(new THREE.OctahedronGeometry(1.1), diamondMat);
-    diamond.position.y = 7;
-    diamond.name = 'diamond';
-    g.add(diamond);
-    const ring = new THREE.Mesh(new THREE.RingGeometry(3, 4.2, 24), new THREE.MeshBasicMaterial({ color: 0xffd319, transparent: true, opacity: 0.8, side: THREE.DoubleSide }));
-    ring.rotation.x = -Math.PI / 2;
-    ring.position.y = 0.15;
-    g.add(ring);
-    g.visible = false;
-    this.game.scene.add(g);
-    this.beacon = g;
+// Returns an event object when something notable happens, else null.
+// ctx: {x, z, inCar, inSportsCar, setWanted, addWanted, banner, toast}
+export function updateMissions(sys, dt, ctx) {
+  const m = currentMission(sys);
+  if (!m || !sys.active) return null;
+  const stage = m.stages[sys.stage];
+  sys.pulse += dt;
+  const gem = sys.beacon.getObjectByName('gem');
+  if (gem) {
+    gem.rotation.y += dt * 2;
+    gem.position.y = 7 + Math.sin(sys.pulse * 3) * 0.8;
   }
-
-  get current() { return SOLMAR_MISSIONS[this.index] || null; }
-  get step() { return this.current ? this.current.steps[this.stepIndex] : null; }
-  get done() { return this.index >= SOLMAR_MISSIONS.length; }
-
-  start(index) {
-    this.index = index;
-    this.stepIndex = 0;
-    this.active = true;
-    this._clearCollectibles();
-    this._enterStep();
-    if (this.onStepChange) this.onStepChange(this._objectiveText());
-  }
-
-  _targetPos(step) {
-    const L = this.game.city.landmarks;
-    if (step.target === 'beach' && step.type === 'collect') return null; // crates scatter
-    return L[step.target] || null;
-  }
-
-  _enterStep() {
-    const step = this.step;
-    if (!step) { this._finishMission(); return; }
-    this.stepTimer = step.time || 0;
-    this.holdTimer = 0;
-    if (step.type === 'collect') this._spawnCollectibles(step);
-    if (step.wanted) this.game.police.addWanted(step.wanted, 'mission');
-    if (step.type === 'wanted' && step.stars) this.game.police.addWanted(step.stars, 'mission');
-    const target = this._targetPos(step);
-    if (target) this._placeBeacon(target.x, target.z);
-    else if (step.type === 'collect') this._placeBeacon(this.collectibles[0].x, this.collectibles[0].z);
-    else if (step.type === 'enterCar' || step.type === 'survive' || step.type === 'wanted') this.beacon.visible = false;
-    if (this.onStepChange) this.onStepChange(this._objectiveText());
-  }
-
-  _placeBeacon(x, z) {
-    this.beacon.position.set(x, 0, z);
-    this.beacon.visible = true;
-    this.marker = { x, z };
-  }
-
-  _spawnCollectibles(step) {
-    this._clearCollectibles();
-    const mat = new THREE.MeshLambertMaterial({ color: 0x9a7a4a });
-    const glow = new THREE.MeshBasicMaterial({ color: 0xffd319 });
-    for (let i = 0; i < step.count; i++) {
-      const angle = (i / step.count) * Math.PI * 2;
-      const x = -60 + Math.cos(angle) * SolmarUtil.rand(30, 95);
-      const z = 292 + Math.sin(angle) * SolmarUtil.rand(4, 18);
-      const grp = new THREE.Group();
-      const crate = new THREE.Mesh(new THREE.BoxGeometry(1.6, 1.6, 1.6), mat);
-      crate.position.y = 0.8;
-      crate.castShadow = true;
-      grp.add(crate);
-      const gem = new THREE.Mesh(new THREE.OctahedronGeometry(0.55), glow);
-      gem.position.y = 2.4;
-      grp.add(gem);
-      grp.position.set(x, 0, z);
-      this.game.scene.add(grp);
-      this.collectibles.push({ x, z, group: grp, gem, taken: false });
+  if (sys.timer > 0) {
+    sys.timer -= dt;
+    if (sys.timer <= 0) {
+      // Surviving the clock is the mission: the timer running out is a win.
+      if (stage.need === 'survive') return advance(sys, m, ctx);
+      sys.active = false;
+      sys.beacon.visible = false;
+      return { type: 'failed', mission: m, reason: 'Out of time.' };
     }
   }
-
-  _clearCollectibles() {
-    for (const c of this.collectibles) this.game.scene.remove(c.group);
-    this.collectibles = [];
-  }
-
-  _objectiveText() {
-    const m = this.current;
-    if (!m) return '';
-    const s = this.step;
-    let t = s ? s.text : '';
-    if (s && s.type === 'collect') {
-      const got = this.collectibles.filter((c) => c.taken).length;
-      t = `Collect the washed-up crates (${got}/${s.count})`;
-    }
-    return `${m.title} — ${t}`;
-  }
-
-  _finishMission() {
-    const m = this.current;
-    this.active = false;
-    this.beacon.visible = false;
-    this.marker = null;
-    this._clearCollectibles();
-    if (m) {
-      this.game.money += m.reward;
-      this.game.audio.cash();
-      this.game.hud.toast(`Mission complete: ${m.title}  +$${m.reward}`);
-      if (this.onMissionComplete) this.onMissionComplete(m, this.index);
-    }
-    this.index++;
-    this.game.save();
-    if (this.done) {
-      if (this.onStoryComplete) this.onStoryComplete();
-      return;
-    }
-    this.start(this.index);
-  }
-
-  _failMission(reason) {
-    this.game.hud.toast(`Mission failed: ${reason}`);
-    this.game.audio.thud();
-    this.stepIndex = 0;
-    this._enterStep();
-  }
-
-  update(dt, player, playerCar) {
-    if (!this.active || !this.step) return;
-    const step = this.step;
-    const px = playerCar ? playerCar.x : player.x;
-    const pz = playerCar ? playerCar.z : player.z;
-    this.beacon.rotation.y += dt * 0.8;
-    const diamond = this.beacon.getObjectByName('diamond');
-    if (diamond) diamond.position.y = 7 + Math.sin(performance.now() / 350) * 0.8;
-    if (step.time && (step.type === 'goto' || step.type === 'survive')) {
-      this.stepTimer -= dt;
-      if (this.stepTimer <= 0) {
-        if (step.type === 'survive') { this.stepIndex++; this._enterStep(); return; }
-        this._failMission('Out of time');
-        return;
+  const d = stage.target ? dist2d(ctx.x, ctx.z, stage.target.x, stage.target.z) : Infinity;
+  if (stage.need === 'car') {
+    if (ctx.inSportsCar) return advance(sys, m, ctx);
+  } else if (stage.need === 'drive') {
+    if (ctx.inCar && d <= stage.radius) return advance(sys, m, ctx);
+  } else if (stage.need === 'reach') {
+    if (d <= stage.radius) return advance(sys, m, ctx);
+  } else if (stage.need === 'hold') {
+    if (d <= stage.radius) {
+      sys.hold += dt;
+      if (sys.hold >= (stage.holdTime || 3)) {
+        ctx.setWanted(4);
+        ctx.toast('ALARM TRIPPED — 4 stars! Run!');
+        return advance(sys, m, ctx);
       }
+    } else {
+      sys.hold = 0;
     }
-    if (step.type === 'enterCar') {
-      if (playerCar) { this.stepIndex++; this._enterStep(); }
-      return;
-    }
-    if (step.type === 'goto' || step.type === 'hold') {
-      const t = this._targetPos(step);
-      if (!t) return;
-      const d = Math.hypot(px - t.x, pz - t.z);
-      if (step.type === 'goto') {
-        if (d < step.radius) { this.stepIndex++; this._enterStep(); }
-      } else {
-        const holding = this.game.keys['KeyE'] && d < step.radius;
-        if (holding) {
-          this.holdTimer += dt;
-          if (this.holdTimer >= step.time) { this.stepIndex++; this._enterStep(); }
-        } else this.holdTimer = Math.max(0, this.holdTimer - dt * 2);
-      }
-      return;
-    }
-    if (step.type === 'collect') {
-      let changed = false;
-      for (const c of this.collectibles) {
-        if (c.taken) continue;
-        c.gem.rotation.y += dt * 2;
-        if (Math.hypot(px - c.x, pz - c.z) < 2.6) {
-          c.taken = true;
-          this.game.scene.remove(c.group);
-          this.game.money += 40;
-          this.game.audio.blip(1320, 0.1, 'sine', 0.12);
-          changed = true;
-        }
-      }
-      if (changed) {
-        const remaining = this.collectibles.filter((c) => !c.taken);
-        if (remaining.length === 0) { this.stepIndex++; this._enterStep(); return; }
-        this._placeBeacon(remaining[0].x, remaining[0].z);
-        if (this.onStepChange) this.onStepChange(this._objectiveText());
-      }
-      return;
-    }
-    if (step.type === 'wanted' || step.type === 'survive') {
-      if (step.type === 'wanted' && this.game.police.wanted === 0 && this.game.police.quietTimer > 3) {
-        this.stepIndex++; this._enterStep();
-      }
-      return;
-    }
+  } else if (stage.need === 'survive') {
+    if (sys.timer <= 0) return advance(sys, m, ctx);
   }
+  return null;
+}
+
+function advance(sys, m, ctx) {
+  sys.stage += 1;
+  sys.hold = 0;
+  if (sys.stage >= m.stages.length) {
+    sys.active = false;
+    sys.beacon.visible = false;
+    sys.index += 1;
+    sys.done = sys.index >= MISSIONS.length;
+    return { type: 'complete', mission: m, reward: m.reward, allDone: sys.done };
+  }
+  const next = m.stages[sys.stage];
+  // A stage timer only starts the clock when it sets one; otherwise the
+  // remaining time carries across stages (the beach dash shares one clock).
+  if (next.timer > 0) sys.timer = next.timer;
+  updateBeacon(sys);
+  return { type: 'stage', mission: m, stage: sys.stage, label: next.label };
+}
+
+export function missionProgressText(sys) {
+  const m = currentMission(sys);
+  if (!m) return 'All jobs done — Costa Luna is yours.';
+  const stage = m.stages[sys.stage];
+  return stage ? stage.label : m.desc;
+}
+
+export function resetMissions(sys) {
+  sys.index = 0;
+  sys.stage = 0;
+  sys.timer = 0;
+  sys.hold = 0;
+  sys.active = false;
+  sys.done = false;
+  sys.beacon.visible = false;
 }
