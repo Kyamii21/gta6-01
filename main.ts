@@ -1,41 +1,29 @@
-// Neon Harbor's entrypoint (Node 22, standard library only). The game itself is
-// the plain static files under game/ — index.html plus its ES modules, the
-// vendored three.js build, no build step and no network request at play time —
-// and the four screenshots under screenshots/. This program hands them in: it
-// copies both folders from beside this file into /output and writes
-// /output/dossier.json, the summary the judge reads, with the vendored make.fun
-// library (vendor/makefun-game.ts, unchanged from the kit).
-//
-// Outside the grader's container, MAKEFUN_OUTPUT_DIR stands in for /output:
-//   mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts
-//
-// Play it locally first with `node serve.ts`, then open http://localhost:8080.
+// Solmar — the program that hands the game in: it copies game/ and
+// screenshots/ from this repository to the output directory and writes
+// /output/dossier.json with buildDossier from vendor/makefun-game.ts.
+// Outside the grader, MAKEFUN_OUTPUT_DIR stands in for /output.
+import { cp, mkdir, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { buildDossier } from "./vendor/makefun-game.ts";
 
-import { cpSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { buildDossier } from './vendor/makefun-game.ts';
+const root = dirname(fileURLToPath(import.meta.url));
+const out = process.env.MAKEFUN_OUTPUT_DIR ?? "/output";
 
-const here = fileURLToPath(new URL('.', import.meta.url));
-const out = process.env.MAKEFUN_OUTPUT_DIR ?? '/output';
+// The gate's caps for gta6-01: dossier text 160 KiB, 4 screenshots of at
+// most 256 KiB each, game/ at most 993 entries and 48 MiB, paths at most
+// 1,000 UTF-8 bytes.
+const caps = {
+  text_max_bytes: 163840,
+  screenshots: { max: 4, max_bytes: 262144 },
+  game_max_files: 993,
+  game_max_bytes: 48 * 1024 * 1024,
+  game_path_max_bytes: 1000,
+};
 
-mkdirSync(out, { recursive: true });
-cpSync(join(here, 'game'), join(out, 'game'), { recursive: true });
-mkdirSync(join(out, 'screenshots'), { recursive: true });
-if (existsSync(join(here, 'screenshots'))) cpSync(join(here, 'screenshots'), join(out, 'screenshots'), { recursive: true });
-
-// The scorer's own caps (reference/gate.json): only text_max_bytes shapes the
-// bytes; the rest refuse an entry the scorer would refuse (more than 4
-// screenshots or one over 256 KiB; more than 993 files in game/ or 48 MiB of
-// game files, in all, or a path under game/ over 1000 bytes: game/ counts
-// beside /output's own 1000-entry cap, its screenshots/ and dossier.json).
-writeFileSync(
-  join(out, 'dossier.json'),
-  buildDossier(out, {
-    text_max_bytes: 163840,
-    screenshots: { max: 4, max_bytes: 262144 },
-    game_max_files: 993,
-    game_max_bytes: 50331648,
-    game_path_max_bytes: 1000,
-  }),
-);
+await mkdir(out, { recursive: true });
+await cp(join(root, "game"), join(out, "game"), { recursive: true });
+await cp(join(root, "screenshots"), join(out, "screenshots"), { recursive: true });
+const dossier = buildDossier(out, caps);
+await writeFile(join(out, "dossier.json"), dossier);
+console.log("Solmar: wrote " + join(out, "dossier.json") + " (" + dossier.length + " bytes)");
