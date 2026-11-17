@@ -1,261 +1,237 @@
-// The harbor police: a wanted level that rises with crimes and fades when the
-// player lies low, police cruisers that chase and ram, and foot officers who
-// arrest a slow player on foot. Getting busted or wasted costs cash and time.
-import * as THREE from 'three';
-import { CAR, CITY, WANTED } from './config.js';
-import { resolveBuildingCollision } from './player.js';
+// Solmar — the wanted system and the police who answer it, plus the
+// pedestrians who fill the sidewalks.
 
-const COP_COLORS = [0x1a1a2e, 0x2a2a3a];
-
-function makeCopMesh() {
-  const group = new THREE.Group();
-  const body = new THREE.Mesh(
-    new THREE.BoxGeometry(0.62, 0.72, 0.36),
-    new THREE.MeshLambertMaterial({ color: 0x1a2a4a }),
-  );
-  body.position.y = 1.12;
-  body.castShadow = true;
-  group.add(body);
-  const head = new THREE.Mesh(
-    new THREE.BoxGeometry(0.34, 0.34, 0.34),
-    new THREE.MeshLambertMaterial({ color: 0xc98d64 }),
-  );
-  head.position.y = 1.66;
-  head.castShadow = true;
-  group.add(head);
-  const hat = new THREE.Mesh(
-    new THREE.BoxGeometry(0.4, 0.1, 0.4),
-    new THREE.MeshLambertMaterial({ color: 0x0e1a33 }),
-  );
-  hat.position.y = 1.86;
-  group.add(hat);
-  const legMat = new THREE.MeshLambertMaterial({ color: 0x141a28 });
-  const legL = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.72, 0.26), legMat);
-  legL.geometry.translate(0, -0.36, 0);
-  legL.position.set(-0.16, 0.74, 0);
-  group.add(legL);
-  const legR = legL.clone();
-  legR.position.x = 0.16;
-  group.add(legR);
-  return { group, legL, legR };
-}
-
-export function createPolice(scene, city, vehicles, rng) {
-  const state = {
-    stars: 0,
-    decayTimer: 0,
-    crimeCooldown: 0,
-    arrestMeter: 0,
-    nearestCopDist: Infinity,
-    flashPhase: 0,
-  };
-  const cops = [];
-  const policeCars = [];
-  let spawnTimer = 0;
-
-  function setStars(n, silent) {
-    const next = Math.max(0, Math.min(WANTED.maxStars, n));
-    const changed = next !== state.stars;
-    state.stars = next;
-    state.decayTimer = 0;
-    return changed && !silent ? next : 0;
+class SolmarPolice {
+  constructor(scene, colliders, traffic, audio, effects) {
+    this.scene = scene;
+    this.colliders = colliders;
+    this.traffic = traffic;
+    this.audio = audio;
+    this.effects = effects;
+    this.wanted = 0;
+    this.cops = [];
+    this.quietTimer = 0;   // time since the last crime
+    this.decayTimer = 0;   // counts down to losing a star while hidden
+    this.bustedTimer = 0;  // a cop car sitting on the player on foot
+    this.spawnTimer = 0;
+    this.onBusted = null;  // callback
+    this.onWantedChange = null;
   }
 
-  function addCrime(stars) {
-    if (state.crimeCooldown > 0) return false;
-    state.crimeCooldown = 8;
-    setStars(state.stars + stars);
-    return true;
+  addWanted(n, reason) {
+    if (this.wanted >= 5) return;
+    this.wanted = Math.min(5, this.wanted + n);
+    this.quietTimer = 0;
+    this.decayTimer = 0;
+    if (this.onWantedChange) this.onWantedChange(this.wanted, reason);
   }
 
-  function spawnPoliceCar(nearX, nearZ) {
-    const angle = rng.range(0, Math.PI * 2);
-    const dist = rng.range(55, 80);
-    const px = nearX + Math.cos(angle) * dist;
-    const pz = nearZ + Math.sin(angle) * dist;
-    const road = city.nearestRoadPoint(px, pz);
-    const car = vehicles.addCar('police', rng.pick(COP_COLORS), road.x, road.z, rng.range(0, Math.PI * 2));
-    car.cruise = CAR.policeSpeed;
-    car.health = 200;
-    policeCars.push(car);
+  clearWanted() {
+    this.wanted = 0;
+    this.quietTimer = 0;
+    if (this.onWantedChange) this.onWantedChange(0, 'clean');
+  }
+
+  _spawnCop(px, pz) {
+    // Spawn on a road a short way from the player, already rolling.
+    const line = SolmarUtil.pick(CITY.ROAD_LINES);
+    const vertical = Math.random() < 0.5;
+    const along = SolmarUtil.clamp(vertical ? pz : px, -240, 240) + SolmarUtil.pick([-70, -55, 55, 70]);
+    const x = vertical ? line : SolmarUtil.clamp(along, -250, 250);
+    const z = vertical ? SolmarUtil.clamp(along, -250, 250) : line;
+    const car = new SolmarCar(this.scene, x, z, 0, 0x11131a, true);
+    car.isPolice = true;
+    car.traffic = null;
+    this.cops.push(car);
     return car;
   }
 
-  function spawnCop(nearX, nearZ) {
-    const angle = rng.range(0, Math.PI * 2);
-    const x = nearX + Math.cos(angle) * rng.range(18, 30);
-    const z = nearZ + Math.sin(angle) * rng.range(18, 30);
-    const { group, legL, legR } = makeCopMesh();
-    group.position.set(x, 0, z);
-    scene.add(group);
-    const cop = { mesh: group, legL, legR, x, z, heading: 0, phase: 0, punchCooldown: 0 };
-    cops.push(cop);
-    return cop;
-  }
-
-  function removeCop(cop) {
-    scene.remove(cop.mesh);
-    const i = cops.indexOf(cop);
-    if (i >= 0) cops.splice(i, 1);
-  }
-
-  function removePoliceCar(car) {
-    scene.remove(car.mesh);
-    const i = policeCars.indexOf(car);
-    if (i >= 0) policeCars.splice(i, 1);
-    const j = vehicles.cars.indexOf(car);
-    if (j >= 0) vehicles.cars.splice(j, 1);
-  }
-
-  /** Police cruisers steer toward the player and ram; returns crash events. */
-  function updatePoliceCars(dt, playerPos, playerCar, events) {
-    const wantedCount = state.stars <= 1 ? 1 : state.stars <= 3 ? state.stars : 5;
-    spawnTimer -= dt;
-    if (policeCars.length < wantedCount && spawnTimer <= 0) {
-      spawnTimer = 2.5;
-      spawnPoliceCar(playerPos.x, playerPos.z);
-    }
-    state.flashPhase += dt * 7;
-    const flash = Math.floor(state.flashPhase) % 2 === 0;
-    let nearest = Infinity;
-    for (const car of policeCars) {
-      const bar = car.mesh.userData.lightBar;
-      if (bar) {
-        bar.red.material.color.setHex(flash ? 0xff2e2e : 0x551111);
-        bar.blue.material.color.setHex(flash ? 0x111155 : 0x2e6bff);
-      }
-      const dx = playerPos.x - car.x;
-      const dz = playerPos.z - car.z;
-      const dist = Math.hypot(dx, dz);
-      nearest = Math.min(nearest, dist);
-      const targetHeading = Math.atan2(dx, dz);
-      let diff = targetHeading - car.heading;
-      while (diff > Math.PI) diff -= Math.PI * 2;
-      while (diff < -Math.PI) diff += Math.PI * 2;
-      const steer = Math.max(-1, Math.min(1, diff * 2.2));
-      car.heading += steer * 2.1 * dt * Math.min(1, 0.4 + car.speed / 12);
-      const targetSpeed = Math.min(CAR.policeSpeed, 12 + dist * 0.35);
-      car.speed += (targetSpeed - car.speed) * Math.min(1, dt * 1.6);
-      const f = { x: Math.sin(car.heading), z: Math.cos(car.heading) };
-      let nx = car.x + f.x * car.speed * dt;
-      let nz = car.z + f.z * car.speed * dt;
-      const clamped = city.clampToCity(nx, nz, 3);
-      const fixed = resolveBuildingCollision(clamped.x, clamped.z, 2.1, city.colliders);
-      if (fixed.hit) car.speed *= 0.6;
-      car.x = fixed.x;
-      car.z = fixed.z;
-      car.mesh.position.set(car.x, 0, car.z);
-      car.mesh.rotation.y = car.heading;
-      const spin = (car.speed * dt) / 0.38;
-      for (const wheel of car.mesh.userData.wheels) wheel.rotation.x += spin;
-      // Ram the player's car.
-      if (playerCar && dist < 4.6 && car.speed > 6) {
-        events.push({ type: 'rammed', by: car });
-        car.speed *= 0.5;
-      }
-      // A cruiser that fell far behind respawns closer.
-      if (dist > 190) {
-        const angle = rng.range(0, Math.PI * 2);
-        const road = city.nearestRoadPoint(playerPos.x + Math.cos(angle) * 60, playerPos.z + Math.sin(angle) * 60);
-        car.x = road.x;
-        car.z = road.z;
-        car.speed = 10;
+  _despawnFarCops(px, pz) {
+    for (let i = this.cops.length - 1; i >= 0; i--) {
+      const c = this.cops[i];
+      if (Math.sqrt(SolmarUtil.dist2(c.x, c.z, px, pz)) > 320) {
+        c.dispose();
+        this.cops.splice(i, 1);
       }
     }
-    state.nearestCopDist = nearest;
-    return nearest;
   }
 
-  function updateCops(dt, player, events) {
-    if (state.stars === 0) {
-      for (const cop of [...cops]) removeCop(cop);
-      return;
-    }
-    if (player.state.onFoot && cops.length < Math.min(3, state.stars) && rng.chance(dt * 0.5)) {
-      spawnCop(player.state.x, player.state.z);
-    }
-    let arresting = false;
-    for (const cop of [...cops]) {
-      const dx = player.state.x - cop.x;
-      const dz = player.state.z - cop.z;
-      const dist = Math.hypot(dx, dz);
-      state.nearestCopDist = Math.min(state.nearestCopDist, dist);
-      if (!player.state.onFoot || dist > 120) {
-        removeCop(cop);
-        continue;
-      }
-      cop.heading = Math.atan2(dx, dz);
-      const speed = 6.8;
-      let nx = cop.x + Math.sin(cop.heading) * speed * dt;
-      let nz = cop.z + Math.cos(cop.heading) * speed * dt;
-      const fixed = resolveBuildingCollision(nx, nz, 0.55, city.colliders);
-      cop.x = fixed.x;
-      cop.z = fixed.z;
-      cop.phase += dt * speed * 1.8;
-      cop.mesh.position.set(cop.x, 0, cop.z);
-      cop.mesh.rotation.y = cop.heading;
-      cop.legL.rotation.x = Math.sin(cop.phase) * 0.6;
-      cop.legR.rotation.x = -Math.sin(cop.phase) * 0.6;
-      if (dist < 1.8) {
-        if (cop.punchCooldown <= 0) {
-          cop.punchCooldown = 1.1;
-          events.push({ type: 'copPunch', damage: 6 });
+  update(dt, player, playerCar, pedestrians) {
+    const px = playerCar ? playerCar.x : player.x;
+    const pz = playerCar ? playerCar.z : player.z;
+    this.quietTimer += dt;
+    // Wanted decays when the player stays clean and out of sight.
+    if (this.wanted > 0) {
+      const nearestCop = this._nearestCopDist(px, pz);
+      if (this.quietTimer > 20 && nearestCop > 55) {
+        this.decayTimer += dt;
+        if (this.decayTimer > 10) {
+          this.wanted -= 1;
+          this.decayTimer = 0;
+          if (this.onWantedChange) this.onWantedChange(this.wanted, 'cooled off');
         }
-        if (player.state.speed < 2.5) arresting = true;
-      }
-      if (cop.punchCooldown > 0) cop.punchCooldown -= dt;
+      } else this.decayTimer = 0;
     }
-    if (arresting) {
-      state.arrestMeter += dt;
-      if (state.arrestMeter >= WANTED.arrestSeconds) {
-        state.arrestMeter = 0;
-        events.push({ type: 'busted' });
-      }
-    } else {
-      state.arrestMeter = Math.max(0, state.arrestMeter - dt * 2);
+    // Keep the right number of pursuit cars on the road.
+    const want = this.wanted === 0 ? 0 : Math.min(2 + this.wanted, 7);
+    this.spawnTimer -= dt;
+    if (this.cops.length < want && this.spawnTimer <= 0) {
+      this._spawnCop(px, pz);
+      this.spawnTimer = 1.6;
     }
-  }
-
-  function update(dt, player, playerCar, events) {
-    if (state.crimeCooldown > 0) state.crimeCooldown -= dt;
-    state.nearestCopDist = Infinity;
-    const playerPos = playerCar
-      ? { x: playerCar.x, z: playerCar.z }
-      : { x: player.state.x, z: player.state.z };
-    if (state.stars > 0) {
-      updatePoliceCars(dt, playerPos, playerCar, events);
-      updateCops(dt, player, events);
-      // Wanted fades when the heat is off: no crime lately, no cop close.
-      if (state.nearestCopDist > 70) {
-        state.decayTimer += dt;
-        if (state.decayTimer >= WANTED.decaySeconds) {
-          state.decayTimer = 0;
-          setStars(state.stars - 1, true);
+    if (this.wanted === 0) {
+      for (let i = this.cops.length - 1; i >= 0; i--) {
+        const c = this.cops[i];
+        if (Math.sqrt(SolmarUtil.dist2(c.x, c.z, px, pz)) > 120) { c.dispose(); this.cops.splice(i, 1); }
+      }
+    }
+    this._despawnFarCops(px, pz);
+    // Pursuit: steer at the player, ram them, and try to box them in.
+    let busted = false;
+    for (const cop of this.cops) {
+      const dx = px - cop.x, dz = pz - cop.z;
+      const dist = Math.sqrt(dx * dx + dz * dz) || 1;
+      const targetAngle = Math.atan2(dx, dz);
+      const diff = SolmarUtil.angleDiff(cop.angle, targetAngle);
+      const steer = SolmarUtil.clamp(diff * 1.4, -1, 1);
+      const speedTarget = dist > 26 ? 26 : 24;
+      const throttle = cop.speed < speedTarget ? 1 : 0;
+      cop.drive({ throttle, steer, brake: false }, dt, this.colliders, (spd) => {
+        this.effects.sparks(cop.x, 0.8, cop.z, 6);
+        this.audio.crash();
+      });
+      // Ram damage.
+      if (dist < 3.4) {
+        if (playerCar) {
+          if (playerCar.damage(6 * dt * 8)) this._blowUpCar(playerCar);
+        } else {
+          player.health -= 9 * dt;
+          this.bustedTimer += dt;
+          if (this.bustedTimer > 2.5) busted = true;
         }
-      } else {
-        state.decayTimer = 0;
+      } else if (!playerCar) {
+        this.bustedTimer = Math.max(0, this.bustedTimer - dt);
       }
-    } else {
-      // Clear leftovers when the heat is gone.
-      for (const car of [...policeCars]) removePoliceCar(car);
-      for (const cop of [...cops]) removeCop(cop);
+      // Cops clip pedestrians out of the way (they scatter).
+      for (const ped of pedestrians) {
+        if (ped.fallen) continue;
+        if (Math.sqrt(SolmarUtil.dist2(ped.x, ped.z, cop.x, cop.z)) < 4) ped.fleeFrom(cop.x, cop.z);
+      }
     }
+    if (busted && this.onBusted) this.onBusted();
   }
 
-  function clearAll() {
-    setStars(0, true);
-    for (const car of [...policeCars]) removePoliceCar(car);
-    for (const cop of [...cops]) removeCop(cop);
+  _nearestCopDist(px, pz) {
+    let best = 1e9;
+    for (const c of this.cops) best = Math.min(best, Math.sqrt(SolmarUtil.dist2(c.x, c.z, px, pz)));
+    return best;
   }
 
-  return {
-    state,
-    cops,
-    policeCars,
-    setStars,
-    addCrime,
-    spawnPoliceCar,
-    update,
-    clearAll,
-  };
+  _blowUpCar(car) {
+    this.effects.explosion(car.x, 1, car.z);
+    this.audio.boom();
+    car.dead = true;
+  }
+
+  reset() {
+    for (const c of this.cops) c.dispose();
+    this.cops = [];
+    this.wanted = 0;
+    this.bustedTimer = 0;
+    this.quietTimer = 0;
+  }
+}
+
+// ---- pedestrians -------------------------------------------------------
+class SolmarPedestrian {
+  constructor(scene, x, z) {
+    this.scene = scene;
+    this.x = x; this.z = z;
+    this.heading = Math.random() * Math.PI * 2;
+    this.speed = SolmarUtil.rand(1.0, 1.7);
+    this.fallen = false;
+    this.fade = 1;
+    this.fleeTimer = 0;
+    this.retarget = 0;
+    this.group = new THREE.Group();
+    const shirt = new THREE.MeshLambertMaterial({ color: SolmarUtil.pick([0xc9c9c9, 0x5a7fb8, 0xc98a5a, 0x7ab87a, 0xb85a8a, 0x8a5ab8]) });
+    const pants = new THREE.MeshLambertMaterial({ color: 0x333a44 });
+    const skin = new THREE.MeshLambertMaterial({ color: SolmarUtil.pick([0xd9a066, 0x8a5a38, 0xe8b88a, 0x6a4530]) });
+    const torso = new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.75, 0.36), shirt);
+    torso.position.y = 1.1;
+    torso.castShadow = true;
+    this.group.add(torso);
+    const head = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.38, 0.36), skin);
+    head.position.y = 1.7;
+    this.group.add(head);
+    this.legL = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.68, 0.26), pants);
+    this.legL.geometry.translate(0, -0.3, 0);
+    this.legL.position.set(-0.16, 0.68, 0);
+    this.group.add(this.legL);
+    this.legR = this.legL.clone();
+    this.legR.position.x = 0.16;
+    this.group.add(this.legR);
+    this.phase = Math.random() * 6;
+    this.group.position.set(x, 0, z);
+    scene.add(this.group);
+  }
+
+  fleeFrom(x, z) {
+    const dx = this.x - x, dz = this.z - z;
+    const d = Math.hypot(dx, dz) || 1;
+    this.heading = Math.atan2(dx / d, dz / d);
+    this.fleeTimer = 2.5;
+    this.speed = 4.5;
+  }
+
+  fall() {
+    this.fallen = true;
+    this.group.rotation.x = -Math.PI / 2;
+    this.group.position.y = 0.35;
+  }
+
+  update(dt, colliders, danger) {
+    if (this.fallen) {
+      this.fade -= dt * 0.25;
+      this.group.traverse((o) => { if (o.material) o.material.transparent = true, o.material.opacity = Math.max(0, this.fade); });
+      return this.fade <= 0;
+    }
+    this.retarget -= dt;
+    if (this.retarget <= 0) {
+      this.retarget = SolmarUtil.rand(4, 9);
+      // Walk along a sidewalk: pick a road line, walk parallel to it.
+      const vertical = Math.random() < 0.5;
+      const line = SolmarUtil.pick(CITY.ROAD_LINES);
+      const side = Math.random() < 0.5 ? 8.6 : -8.6;
+      if (vertical) { this.tx = line + side; this.tz = SolmarUtil.rand(-240, 240); }
+      else { this.tx = SolmarUtil.rand(-240, 240); this.tz = line + side; }
+    }
+    if (danger) {
+      const d = Math.hypot(this.x - danger.x, this.z - danger.z);
+      if (d < 10 && this.fleeTimer <= 0) this.fleeFrom(danger.x, danger.z);
+    }
+    if (this.fleeTimer > 0) this.fleeTimer -= dt;
+    else this.speed = SolmarUtil.lerp(this.speed, 1.4, dt);
+    const dx = (this.tx || this.x) - this.x, dz = (this.tz || this.z) - this.z;
+    const dist = Math.hypot(dx, dz);
+    if (dist > 1) {
+      const target = Math.atan2(dx / dist, dz / dist);
+      this.heading = SolmarUtil.angleLerp(this.heading, target, Math.min(1, dt * 5));
+      const nx = this.x + Math.sin(this.heading) * this.speed * dt;
+      const nz = this.z + Math.cos(this.heading) * this.speed * dt;
+      if (!collideCircle(nx, this.z, 0.5, colliders)) this.x = nx;
+      if (!collideCircle(this.x, nz, 0.5, colliders)) this.z = nz;
+      this.phase += dt * this.speed * 3.2;
+      const swing = Math.sin(this.phase) * 0.6;
+      this.legL.rotation.x = swing;
+      this.legR.rotation.x = -swing;
+    }
+    this.x = SolmarUtil.clamp(this.x, -300, 310);
+    this.z = SolmarUtil.clamp(this.z, -280, 320);
+    this.group.position.set(this.x, 0, this.z);
+    this.group.rotation.y = this.heading;
+    return false;
+  }
+
+  dispose() { this.scene.remove(this.group); }
 }

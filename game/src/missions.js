@@ -1,354 +1,265 @@
-// Mira's three jobs, played in order: a harbor courier run, a chase to win back a
-// stolen ledger, and a minute of harbor heat before the safehouse. Each mission
-// is a small stage machine with a beacon in the world, a timer, and a cash reward.
-// Cash bags scattered around the city are a side hustle.
-import * as THREE from 'three';
-import { CITY, MISSIONS } from './config.js';
+// Solmar — missions and the story: five jobs for Leo Marin, from his first
+// stolen car to the Solmar Score, each with steps, a 3D beacon, a timer
+// where it matters, and a cash payout.
 
-const PICKUP_SPOT = { x: -60, z: 196 };
-const DROP_SPOT = { x: 120, z: -160 };
-const SAFEHOUSE = { x: -160, z: -160 };
+const SOLMAR_MISSIONS = [
+  {
+    id: 'wheels',
+    title: 'Wheels Up',
+    intro: 'Mama Rosa needs wheels. Get in any car and bring it to Spray & Shine.',
+    reward: 150,
+    steps: [
+      { type: 'enterCar', text: 'Steal a car — press E next to one' },
+      { type: 'goto', target: 'paintShop', radius: 9, text: 'Drive to Spray & Shine' },
+    ],
+  },
+  {
+    id: 'drop',
+    title: 'The Drop',
+    intro: 'A package is waiting in Palm Park. Grab it and run it to the Docks before the buyer walks.',
+    reward: 300,
+    steps: [
+      { type: 'goto', target: 'park', radius: 6, text: 'Pick up the package in Palm Park' },
+      { type: 'goto', target: 'docks', radius: 10, text: 'Deliver to the Docks', time: 150 },
+    ],
+  },
+  {
+    id: 'pursuit',
+    title: 'Hot Pursuit',
+    intro: 'The cops are on you, Leo. Lose them — lay low until the heat dies down.',
+    reward: 400,
+    steps: [
+      { type: 'wanted', stars: 2, text: 'Get the cops off your tail' },
+      { type: 'survive', time: 45, text: 'Stay out of sight — heat cooling down' },
+    ],
+  },
+  {
+    id: 'beach',
+    title: 'Beachcomber',
+    intro: 'Six crates washed up on the beach after last night’s storm. Collect them all.',
+    reward: 500,
+    steps: [
+      { type: 'collect', target: 'beach', count: 6, radius: 130, text: 'Collect the washed-up crates (0/6)' },
+    ],
+  },
+  {
+    id: 'score',
+    title: 'The Solmar Score',
+    intro: 'The big one. Hit Solmar National Bank, grab the loot, and get back to Leo’s Place alive.',
+    reward: 2500,
+    steps: [
+      { type: 'goto', target: 'bank', radius: 10, text: 'Get to Solmar National Bank' },
+      { type: 'hold', target: 'bank', time: 5, text: 'Hold E to crack the vault' },
+      { type: 'goto', target: 'safehouse', radius: 9, text: 'Escape to Leo’s Place!', wanted: 3 },
+    ],
+  },
+];
 
-function makeBeacon(color) {
-  const group = new THREE.Group();
-  const beam = new THREE.Mesh(
-    new THREE.CylinderGeometry(2.2, 2.2, 34, 12, 1, true),
-    new THREE.MeshBasicMaterial({
-      color,
-      transparent: true,
-      opacity: 0.22,
-      side: THREE.DoubleSide,
-      depthWrite: false,
-    }),
-  );
-  beam.position.y = 17;
-  group.add(beam);
-  const ring = new THREE.Mesh(
-    new THREE.RingGeometry(2.4, 3.4, 24),
-    new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.7, side: THREE.DoubleSide }),
-  );
-  ring.rotation.x = -Math.PI / 2;
-  ring.position.y = 0.15;
-  group.add(ring);
-  const diamond = new THREE.Mesh(
-    new THREE.OctahedronGeometry(1.1),
-    new THREE.MeshBasicMaterial({ color }),
-  );
-  diamond.position.y = 8;
-  group.add(diamond);
-  group.userData.diamond = diamond;
-  return group;
-}
-
-function makeCashBagMesh() {
-  const group = new THREE.Group();
-  const bag = new THREE.Mesh(
-    new THREE.BoxGeometry(0.7, 0.5, 0.5),
-    new THREE.MeshLambertMaterial({ color: 0x2e9e4f }),
-  );
-  bag.position.y = 0.5;
-  bag.castShadow = true;
-  group.add(bag);
-  const band = new THREE.Mesh(
-    new THREE.BoxGeometry(0.72, 0.12, 0.52),
-    new THREE.MeshBasicMaterial({ color: 0xd8c13c }),
-  );
-  band.position.y = 0.5;
-  group.add(band);
-  return group;
-}
-
-export function createMissions(scene, city, vehicles, rng) {
-  const beacon = makeBeacon(0xffd23c);
-  beacon.visible = false;
-  scene.add(beacon);
-  const targetBeacon = makeBeacon(0xff3b30);
-  targetBeacon.visible = false;
-  scene.add(targetBeacon);
-
-  const state = {
-    index: 0,
-    started: false,
-    stage: 0,
-    timer: 0,
-    surviveTimer: 0,
-    hits: 0,
-    carrying: false,
-    done: false,
-    allDone: false,
-    targetCar: null,
-    hitCooldown: 0,
-    objectiveText: '',
-    objectivePos: null,
-  };
-
-  // Start marker: Mira's garage, where each job begins.
-  const startMarker = makeBeacon(0x37e6ff);
-  startMarker.position.set(40, 0, 160);
-  scene.add(startMarker);
-  const startPos = { x: 40, z: 160 };
-
-  const bags = [];
-  for (let i = 0; i < 6; i += 1) {
-    const mesh = makeCashBagMesh();
-    scene.add(mesh);
-    bags.push({ mesh, x: 0, z: 0, active: false, respawn: 0 });
-  }
-  function placeBag(bag) {
-    const line = rng.pick(CITY.roadLines);
-    const along = rng.range(-CITY.half + 30, CITY.half - 30);
-    const side = rng.chance(0.5) ? 1 : -1;
-    if (rng.chance(0.5)) {
-      bag.x = line + side * (CITY.roadWidth / 2 + 3);
-      bag.z = along;
-    } else {
-      bag.x = along;
-      bag.z = line + side * (CITY.roadWidth / 2 + 3);
-    }
-    bag.mesh.position.set(bag.x, 0, bag.z);
-    bag.active = true;
-  }
-  for (const bag of bags) placeBag(bag);
-
-  function mission() {
-    return MISSIONS[state.index];
+class SolmarMissions {
+  constructor(game) {
+    this.game = game;
+    this.index = 0;
+    this.stepIndex = 0;
+    this.active = false;
+    this.stepTimer = 0;
+    this.holdTimer = 0;
+    this.collectibles = [];
+    this.beacon = null;
+    this.marker = null;
+    this.onMissionComplete = null;
+    this.onStepChange = null;
+    this.onStoryComplete = null;
+    this._buildBeacon();
   }
 
-  function setObjective(text, pos) {
-    state.objectiveText = text;
-    state.objectivePos = pos;
-    if (pos) {
-      beacon.visible = true;
-      beacon.position.set(pos.x, 0, pos.z);
-    } else {
-      beacon.visible = false;
-    }
+  _buildBeacon() {
+    const g = new THREE.Group();
+    const beamMat = new THREE.MeshBasicMaterial({ color: 0xffd319, transparent: true, opacity: 0.28, depthWrite: false, side: THREE.DoubleSide });
+    const beam = new THREE.Mesh(new THREE.CylinderGeometry(2.2, 2.2, 60, 12, 1, true), beamMat);
+    beam.position.y = 30;
+    g.add(beam);
+    const diamondMat = new THREE.MeshBasicMaterial({ color: 0xffd319 });
+    const diamond = new THREE.Mesh(new THREE.OctahedronGeometry(1.1), diamondMat);
+    diamond.position.y = 7;
+    diamond.name = 'diamond';
+    g.add(diamond);
+    const ring = new THREE.Mesh(new THREE.RingGeometry(3, 4.2, 24), new THREE.MeshBasicMaterial({ color: 0xffd319, transparent: true, opacity: 0.8, side: THREE.DoubleSide }));
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.y = 0.15;
+    g.add(ring);
+    g.visible = false;
+    this.game.scene.add(g);
+    this.beacon = g;
   }
 
-  function startMission(index, events) {
-    state.index = index;
-    state.started = true;
-    state.stage = 0;
-    state.hits = 0;
-    state.carrying = false;
-    state.targetCar = null;
-    const m = MISSIONS[index];
-    state.timer = m.timeLimit;
-    if (index === 0) {
-      setObjective('Pick up the crate at the harbor warehouse', PICKUP_SPOT);
-    } else if (index === 1) {
-      const car = vehicles.addCar('traffic', 0xd8a13c, 0, 80, 0);
-      car.cruise = 17;
-      car.health = 300;
-      state.targetCar = car;
-      targetBeacon.visible = true;
-      setObjective('Chase the gold sedan — ram it 3 times', { x: car.x, z: car.z });
-    } else {
-      state.surviveTimer = 60;
-      events.push({ type: 'setWanted', stars: 3 });
-      setObjective('Lose the heat — survive 60 seconds', null);
-    }
-    events.push({ type: 'missionStart', mission: m });
+  get current() { return SOLMAR_MISSIONS[this.index] || null; }
+  get step() { return this.current ? this.current.steps[this.stepIndex] : null; }
+  get done() { return this.index >= SOLMAR_MISSIONS.length; }
+
+  start(index) {
+    this.index = index;
+    this.stepIndex = 0;
+    this.active = true;
+    this._clearCollectibles();
+    this._enterStep();
+    if (this.onStepChange) this.onStepChange(this._objectiveText());
   }
 
-  function completeMission(events) {
-    const m = MISSIONS[state.index];
-    events.push({ type: 'missionComplete', mission: m, reward: m.reward });
-    state.started = false;
-    state.stage = 0;
-    setObjective('', null);
-    targetBeacon.visible = false;
-    if (state.targetCar) {
-      const i = vehicles.cars.indexOf(state.targetCar);
-      if (i >= 0) {
-        scene.remove(state.targetCar.mesh);
-        vehicles.cars.splice(i, 1);
-      }
-      state.targetCar = null;
-    }
-    if (state.index + 1 < MISSIONS.length) {
-      state.index += 1;
-      events.push({ type: 'toast', text: `Next job: ${MISSIONS[state.index].title} — go to Mira's garage (cyan beacon)` });
-    } else {
-      state.allDone = true;
-      events.push({ type: 'storyComplete' });
+  _targetPos(step) {
+    const L = this.game.city.landmarks;
+    if (step.target === 'beach' && step.type === 'collect') return null; // crates scatter
+    return L[step.target] || null;
+  }
+
+  _enterStep() {
+    const step = this.step;
+    if (!step) { this._finishMission(); return; }
+    this.stepTimer = step.time || 0;
+    this.holdTimer = 0;
+    if (step.type === 'collect') this._spawnCollectibles(step);
+    if (step.wanted) this.game.police.addWanted(step.wanted, 'mission');
+    if (step.type === 'wanted' && step.stars) this.game.police.addWanted(step.stars, 'mission');
+    const target = this._targetPos(step);
+    if (target) this._placeBeacon(target.x, target.z);
+    else if (step.type === 'collect') this._placeBeacon(this.collectibles[0].x, this.collectibles[0].z);
+    else if (step.type === 'enterCar' || step.type === 'survive' || step.type === 'wanted') this.beacon.visible = false;
+    if (this.onStepChange) this.onStepChange(this._objectiveText());
+  }
+
+  _placeBeacon(x, z) {
+    this.beacon.position.set(x, 0, z);
+    this.beacon.visible = true;
+    this.marker = { x, z };
+  }
+
+  _spawnCollectibles(step) {
+    this._clearCollectibles();
+    const mat = new THREE.MeshLambertMaterial({ color: 0x9a7a4a });
+    const glow = new THREE.MeshBasicMaterial({ color: 0xffd319 });
+    for (let i = 0; i < step.count; i++) {
+      const angle = (i / step.count) * Math.PI * 2;
+      const x = -60 + Math.cos(angle) * SolmarUtil.rand(30, 95);
+      const z = 292 + Math.sin(angle) * SolmarUtil.rand(4, 18);
+      const grp = new THREE.Group();
+      const crate = new THREE.Mesh(new THREE.BoxGeometry(1.6, 1.6, 1.6), mat);
+      crate.position.y = 0.8;
+      crate.castShadow = true;
+      grp.add(crate);
+      const gem = new THREE.Mesh(new THREE.OctahedronGeometry(0.55), glow);
+      gem.position.y = 2.4;
+      grp.add(gem);
+      grp.position.set(x, 0, z);
+      this.game.scene.add(grp);
+      this.collectibles.push({ x, z, group: grp, gem, taken: false });
     }
   }
 
-  function failMission(events, reason) {
-    const m = MISSIONS[state.index];
-    events.push({ type: 'missionFailed', mission: m, reason });
-    state.started = false;
-    state.stage = 0;
-    setObjective('', null);
-    targetBeacon.visible = false;
-    if (state.targetCar) {
-      const i = vehicles.cars.indexOf(state.targetCar);
-      if (i >= 0) {
-        scene.remove(state.targetCar.mesh);
-        vehicles.cars.splice(i, 1);
-      }
-      state.targetCar = null;
-    }
-    events.push({ type: 'toast', text: 'Job failed — return to Mira\u2019s garage to try again' });
+  _clearCollectibles() {
+    for (const c of this.collectibles) this.game.scene.remove(c.group);
+    this.collectibles = [];
   }
 
-  /** The player pressed E: start a job, pick up, or finish a stage. */
-  function interact(playerPos, events) {
-    if (!state.started) {
-      if (Math.hypot(playerPos.x - startPos.x, playerPos.z - startPos.z) < 7 && !state.allDone) {
-        events.push({ type: 'briefing', mission: MISSIONS[state.index] });
-        return true;
-      }
-      return false;
+  _objectiveText() {
+    const m = this.current;
+    if (!m) return '';
+    const s = this.step;
+    let t = s ? s.text : '';
+    if (s && s.type === 'collect') {
+      const got = this.collectibles.filter((c) => c.taken).length;
+      t = `Collect the washed-up crates (${got}/${s.count})`;
     }
-    if (state.index === 0 && state.stage === 1) {
-      if (Math.hypot(playerPos.x - PICKUP_SPOT.x, playerPos.z - PICKUP_SPOT.z) < 5) {
-        state.carrying = true;
-        state.stage = 2;
-        state.timer = MISSIONS[0].timeLimit;
-        setObjective('Deliver the crate to the neon garage', DROP_SPOT);
-        events.push({ type: 'toast', text: 'Crate secured — deliver it before the patrol sweeps the pier' });
-        return true;
-      }
+    return `${m.title} — ${t}`;
+  }
+
+  _finishMission() {
+    const m = this.current;
+    this.active = false;
+    this.beacon.visible = false;
+    this.marker = null;
+    this._clearCollectibles();
+    if (m) {
+      this.game.money += m.reward;
+      this.game.audio.cash();
+      this.game.hud.toast(`Mission complete: ${m.title}  +$${m.reward}`);
+      if (this.onMissionComplete) this.onMissionComplete(m, this.index);
     }
-    if (state.index === 1 && state.stage === 1 && state.targetCar) {
-      const t = state.targetCar;
-      if (Math.hypot(playerPos.x - t.x, playerPos.z - t.z) < 5) {
-        completeMission(events);
-        return true;
+    this.index++;
+    this.game.save();
+    if (this.done) {
+      if (this.onStoryComplete) this.onStoryComplete();
+      return;
+    }
+    this.start(this.index);
+  }
+
+  _failMission(reason) {
+    this.game.hud.toast(`Mission failed: ${reason}`);
+    this.game.audio.thud();
+    this.stepIndex = 0;
+    this._enterStep();
+  }
+
+  update(dt, player, playerCar) {
+    if (!this.active || !this.step) return;
+    const step = this.step;
+    const px = playerCar ? playerCar.x : player.x;
+    const pz = playerCar ? playerCar.z : player.z;
+    this.beacon.rotation.y += dt * 0.8;
+    const diamond = this.beacon.getObjectByName('diamond');
+    if (diamond) diamond.position.y = 7 + Math.sin(performance.now() / 350) * 0.8;
+    if (step.time && (step.type === 'goto' || step.type === 'survive')) {
+      this.stepTimer -= dt;
+      if (this.stepTimer <= 0) {
+        if (step.type === 'survive') { this.stepIndex++; this._enterStep(); return; }
+        this._failMission('Out of time');
+        return;
       }
     }
-    return false;
-  }
-
-  function acceptBriefing(events) {
-    startMission(state.index, events);
-  }
-
-  function update(dt, playerPos, playerCar, events) {
-    beacon.rotation.y += dt * 0.8;
-    if (beacon.userData.diamond) beacon.userData.diamond.rotation.y += dt * 2;
-    if (targetBeacon.userData.diamond) targetBeacon.userData.diamond.rotation.y += dt * 2;
-    startMarker.rotation.y += dt * 0.5;
-
-    // Cash bags.
-    for (const bag of bags) {
-      if (bag.active) {
-        bag.mesh.rotation.y += dt;
-        if (Math.hypot(playerPos.x - bag.x, playerPos.z - bag.z) < 2.2) {
-          bag.active = false;
-          bag.mesh.visible = false;
-          bag.respawn = 45;
-          events.push({ type: 'cashBag', amount: 50 });
-        }
+    if (step.type === 'enterCar') {
+      if (playerCar) { this.stepIndex++; this._enterStep(); }
+      return;
+    }
+    if (step.type === 'goto' || step.type === 'hold') {
+      const t = this._targetPos(step);
+      if (!t) return;
+      const d = Math.hypot(px - t.x, pz - t.z);
+      if (step.type === 'goto') {
+        if (d < step.radius) { this.stepIndex++; this._enterStep(); }
       } else {
-        bag.respawn -= dt;
-        if (bag.respawn <= 0) {
-          placeBag(bag);
-          bag.mesh.visible = true;
-        }
+        const holding = this.game.keys['KeyE'] && d < step.radius;
+        if (holding) {
+          this.holdTimer += dt;
+          if (this.holdTimer >= step.time) { this.stepIndex++; this._enterStep(); }
+        } else this.holdTimer = Math.max(0, this.holdTimer - dt * 2);
       }
+      return;
     }
-
-    if (!state.started || state.allDone) return;
-    const m = MISSIONS[state.index];
-    state.timer -= dt;
-    if (state.hitCooldown > 0) state.hitCooldown -= dt;
-
-    if (state.index === 0) {
-      if (state.stage === 0) {
-        if (Math.hypot(playerPos.x - PICKUP_SPOT.x, playerPos.z - PICKUP_SPOT.z) < 5) {
-          state.stage = 1;
-          events.push({ type: 'toast', text: 'Press E to pick up the crate' });
-        }
-      } else if (state.stage === 2) {
-        if (Math.hypot(playerPos.x - DROP_SPOT.x, playerPos.z - DROP_SPOT.z) < 6) {
-          completeMission(events);
-          return;
+    if (step.type === 'collect') {
+      let changed = false;
+      for (const c of this.collectibles) {
+        if (c.taken) continue;
+        c.gem.rotation.y += dt * 2;
+        if (Math.hypot(px - c.x, pz - c.z) < 2.6) {
+          c.taken = true;
+          this.game.scene.remove(c.group);
+          this.game.money += 40;
+          this.game.audio.blip(1320, 0.1, 'sine', 0.12);
+          changed = true;
         }
       }
-    } else if (state.index === 1) {
-      const target = state.targetCar;
-      if (!target) return;
-      targetBeacon.position.set(target.x, 0, target.z);
-      state.objectivePos = { x: target.x, z: target.z };
-      if (state.stage === 0) {
-        // The getaway car flees along the roads; ramming it slows it down.
-        if (playerCar) {
-          const d = Math.hypot(playerCar.x - target.x, playerCar.z - target.z);
-          if (d < 5 && Math.abs(playerCar.speed) > 7 && state.hitCooldown <= 0) {
-            state.hitCooldown = 1.2;
-            state.hits += 1;
-            target.speed = Math.max(0, target.speed - 6);
-            target.cruise = Math.max(4, target.cruise - 4);
-            events.push({ type: 'toast', text: `Hit ${state.hits} of 3 — keep on him!` });
-            events.push({ type: 'crash' });
-            if (state.hits >= 3) {
-              state.stage = 1;
-              target.cruise = 0;
-              target.speed = 0;
-              setObjective('Get out and take the ledger back (press E)', { x: target.x, z: target.z });
-              events.push({ type: 'toast', text: 'He stopped! Get out and grab the ledger' });
-            }
-          }
-        }
-        // Keep the target on the road grid: it drives like traffic, faster.
-        if (target.cruise > 0) {
-          const along = target.axis === 'x' ? target.x : target.z;
-          for (const line of CITY.roadLines) {
-            if (Math.abs(along - line) < 1.5 && target.turnCooldown <= 0 && rng.chance(0.5)) {
-              target.turnCooldown = 2;
-              target.axis = target.axis === 'x' ? 'z' : 'x';
-              target.dir = rng.chance(0.5) ? 1 : -1;
-              target.line = line;
-              if (target.axis === 'x') {
-                target.z = line + (target.dir > 0 ? 4 : -4);
-                target.heading = target.dir > 0 ? Math.PI / 2 : -Math.PI / 2;
-              } else {
-                target.x = line + (target.dir > 0 ? 4 : -4);
-                target.heading = target.dir > 0 ? 0 : Math.PI;
-              }
-              break;
-            }
-          }
-        }
-      } else if (state.stage === 1) {
-        setObjective('Get out and take the ledger back (press E)', { x: target.x, z: target.z });
+      if (changed) {
+        const remaining = this.collectibles.filter((c) => !c.taken);
+        if (remaining.length === 0) { this.stepIndex++; this._enterStep(); return; }
+        this._placeBeacon(remaining[0].x, remaining[0].z);
+        if (this.onStepChange) this.onStepChange(this._objectiveText());
       }
-    } else if (state.index === 2) {
-      if (state.stage === 0) {
-        state.surviveTimer -= dt;
-        setObjective(`Lose the heat — survive ${Math.ceil(state.surviveTimer)}s`, null);
-        if (state.surviveTimer <= 0) {
-          state.stage = 1;
-          setObjective('Slip into the safehouse on the north pier', SAFEHOUSE);
-          events.push({ type: 'toast', text: 'Heat is off your tail — get to the safehouse!' });
-        }
-      } else if (state.stage === 1) {
-        if (Math.hypot(playerPos.x - SAFEHOUSE.x, playerPos.z - SAFEHOUSE.z) < 6) {
-          completeMission(events);
-          return;
-        }
-      }
+      return;
     }
-
-    if (state.timer <= 0) {
-      failMission(events, 'Time ran out');
+    if (step.type === 'wanted' || step.type === 'survive') {
+      if (step.type === 'wanted' && this.game.police.wanted === 0 && this.game.police.quietTimer > 3) {
+        this.stepIndex++; this._enterStep();
+      }
+      return;
     }
   }
-
-  function timeLeft() {
-    return Math.max(0, Math.ceil(state.timer));
-  }
-
-  return {
-    state,
-    startPos,
-    interact,
-    acceptBriefing,
-    update,
-    timeLeft,
-    mission,
-  };
 }

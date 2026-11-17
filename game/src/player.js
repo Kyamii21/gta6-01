@@ -1,149 +1,133 @@
-// Raka, the player character, on foot: a low-poly figure built from boxes, with
-// walk-cycle leg swing, third-person camera follow, and collision against the
-// city's buildings. Driving is handled by vehicles.js; this module owns the feet.
-import * as THREE from 'three';
-import { CITY, PLAYER } from './config.js';
+// Solmar — the player on foot: a third-person walker with a drag-orbit
+// camera, running, punching, and getting in and out of cars.
 
-function makeBodyMesh() {
-  const group = new THREE.Group();
-  const jacket = new THREE.Mesh(
-    new THREE.BoxGeometry(0.62, 0.72, 0.36),
-    new THREE.MeshLambertMaterial({ color: 0x2e8f7a }),
-  );
-  jacket.position.y = 1.12;
-  jacket.castShadow = true;
-  group.add(jacket);
-  const head = new THREE.Mesh(
-    new THREE.BoxGeometry(0.34, 0.34, 0.34),
-    new THREE.MeshLambertMaterial({ color: 0xc98d64 }),
-  );
-  head.position.y = 1.66;
-  head.castShadow = true;
-  group.add(head);
-  const cap = new THREE.Mesh(
-    new THREE.BoxGeometry(0.38, 0.1, 0.38),
-    new THREE.MeshLambertMaterial({ color: 0x222222 }),
-  );
-  cap.position.y = 1.86;
-  group.add(cap);
-  const legMat = new THREE.MeshLambertMaterial({ color: 0x2a2f3a });
-  const legL = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.72, 0.26), legMat);
-  legL.geometry.translate(0, -0.36, 0);
-  legL.position.set(-0.16, 0.74, 0);
-  legL.castShadow = true;
-  group.add(legL);
-  const legR = legL.clone();
-  legR.position.x = 0.16;
-  group.add(legR);
-  const armMat = new THREE.MeshLambertMaterial({ color: 0x2e8f7a });
-  const armL = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.62, 0.22), armMat);
-  armL.geometry.translate(0, -0.31, 0);
-  armL.position.set(-0.42, 1.44, 0);
-  group.add(armL);
-  const armR = armL.clone();
-  armR.position.x = 0.42;
-  group.add(armR);
-  return { group, legL, legR, armL, armR };
-}
-
-function circleHitsBuilding(x, z, radius, colliders) {
-  for (let i = 0; i < colliders.length; i += 1) {
-    const c = colliders[i];
-    if (x + radius > c.minX && x - radius < c.maxX && z + radius > c.minZ && z - radius < c.maxZ) return c;
+class SolmarPlayer {
+  constructor(scene, x, z) {
+    this.scene = scene;
+    this.pos = new THREE.Vector3(x, 0, z);
+    this.heading = Math.PI; // facing the street
+    this.camYaw = Math.PI;
+    this.camPitch = 0.32;
+    this.camDist = 7.5;
+    this.speed = 0;
+    this.walkPhase = 0;
+    this.punchTimer = 0;
+    this.punchCooldown = 0;
+    this.inCar = null;
+    this.group = new THREE.Group();
+    this._buildMesh();
+    this.group.position.copy(this.pos);
+    scene.add(this.group);
   }
-  return null;
-}
 
-/** Push a circle out of a building AABB; returns the corrected position. */
-export function resolveBuildingCollision(x, z, radius, colliders) {
-  const c = circleHitsBuilding(x, z, radius, colliders);
-  if (!c) return { x, z, hit: false };
-  const dxMin = x + radius - c.minX;
-  const dxMax = c.maxX - (x - radius);
-  const dzMin = z + radius - c.minZ;
-  const dzMax = c.maxZ - (z - radius);
-  const min = Math.min(dxMin, dxMax, dzMin, dzMax);
-  if (min === dxMin) return { x: c.minX - radius, z, hit: true };
-  if (min === dxMax) return { x: c.maxX + radius, z, hit: true };
-  if (min === dzMin) return { x, z: c.minZ - radius, hit: true };
-  return { x, z: c.maxZ + radius, hit: true };
-}
+  _buildMesh() {
+    const skin = new THREE.MeshLambertMaterial({ color: 0xd9a066 });
+    const shirt = new THREE.MeshLambertMaterial({ color: 0x2e8f83 });
+    const pants = new THREE.MeshLambertMaterial({ color: 0x2a3242 });
+    const cap = new THREE.MeshLambertMaterial({ color: 0xd23b2e });
+    const torso = new THREE.Mesh(new THREE.BoxGeometry(0.72, 0.85, 0.4), shirt);
+    torso.position.y = 1.15;
+    torso.castShadow = true;
+    this.group.add(torso);
+    const head = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.42, 0.4), skin);
+    head.position.y = 1.82;
+    head.castShadow = true;
+    this.group.add(head);
+    const capTop = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.14, 0.44), cap);
+    capTop.position.y = 2.06;
+    this.group.add(capTop);
+    const brim = new THREE.Mesh(new THREE.BoxGeometry(0.44, 0.06, 0.24), cap);
+    brim.position.set(0, 2.0, 0.3);
+    this.group.add(brim);
+    this.legL = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.75, 0.3), pants);
+    this.legL.position.set(-0.19, 0.38, 0);
+    this.legL.geometry.translate(0, -0.32, 0);
+    this.legL.position.y = 0.75;
+    this.group.add(this.legL);
+    this.legR = this.legL.clone();
+    this.legR.position.x = 0.19;
+    this.group.add(this.legR);
+    this.armL = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.7, 0.24), shirt);
+    this.armL.geometry.translate(0, -0.28, 0);
+    this.armL.position.set(-0.48, 1.5, 0);
+    this.group.add(this.armL);
+    this.armR = this.armL.clone();
+    this.armR.position.x = 0.48;
+    this.group.add(this.armR);
+  }
 
-export function createPlayer(scene, city) {
-  const { group, legL, legR, armL, armR } = makeBodyMesh();
-  scene.add(group);
-  const state = {
-    x: 0,
-    z: 24,
-    heading: Math.PI,
-    speed: 0,
-    walkPhase: 0,
-    onFoot: true,
-    invulnerable: 0,
-    car: null,
-    punchCooldown: 0,
-  };
-  group.position.set(state.x, 0, state.z);
+  get x() { return this.pos.x; }
+  get z() { return this.pos.z; }
 
-  function update(dt, input, cameraYaw) {
-    if (!state.onFoot) {
-      group.visible = false;
-      return;
+  // input: {f, b, l, r (bools), run, punch}. dt seconds. Returns nothing.
+  update(input, dt, colliders, effects) {
+    if (this.inCar) return;
+    this.punchCooldown = Math.max(0, this.punchCooldown - dt);
+    this.punchTimer = Math.max(0, this.punchTimer - dt);
+    const fwdX = Math.sin(this.camYaw), fwdZ = Math.cos(this.camYaw);
+    const rightX = Math.cos(this.camYaw), rightZ = -Math.sin(this.camYaw);
+    let mx = 0, mz = 0;
+    if (input.f) { mx += fwdX; mz += fwdZ; }
+    if (input.b) { mx -= fwdX; mz -= fwdZ; }
+    if (input.r) { mx += rightX; mz += rightZ; }
+    if (input.l) { mx -= rightX; mz -= rightZ; }
+    const moving = mx !== 0 || mz !== 0;
+    const targetSpeed = moving ? (input.run ? 8.5 : 4.6) : 0;
+    this.speed = SolmarUtil.lerp(this.speed, targetSpeed, Math.min(1, dt * 8));
+    if (moving) {
+      const len = Math.hypot(mx, mz);
+      mx /= len; mz /= len;
+      const targetHeading = Math.atan2(mx, mz);
+      this.heading = SolmarUtil.angleLerp(this.heading, targetHeading, Math.min(1, dt * 12));
+      const nx = this.pos.x + mx * this.speed * dt;
+      const nz = this.pos.z + mz * this.speed * dt;
+      if (!collideCircle(nx, this.pos.z, 0.55, colliders)) this.pos.x = nx;
+      if (!collideCircle(this.pos.x, nz, 0.55, colliders)) this.pos.z = nz;
+      this.pos.x = SolmarUtil.clamp(this.pos.x, -305, 315);
+      this.pos.z = SolmarUtil.clamp(this.pos.z, -285, 415);
+      this.walkPhase += dt * this.speed * 1.6;
+      if (input.run && Math.random() < dt * 6) effects.dust(this.pos.x, 0.1, this.pos.z, 1);
     }
-    group.visible = true;
-    if (state.invulnerable > 0) state.invulnerable = Math.max(0, state.invulnerable - dt);
-    if (state.punchCooldown > 0) state.punchCooldown -= dt;
-    // Movement is relative to the camera: W walks away from the camera.
-    let mx = 0;
-    let mz = 0;
-    if (input.forward) mz -= 1;
-    if (input.back) mz += 1;
-    if (input.left) mx -= 1;
-    if (input.right) mx += 1;
-    const len = Math.hypot(mx, mz);
-    const sprint = input.sprint ? PLAYER.sprintSpeed : PLAYER.walkSpeed;
-    const targetSpeed = len > 0 ? sprint : 0;
-    state.speed += (targetSpeed - state.speed) * Math.min(1, PLAYER.accel * dt / Math.max(1, targetSpeed));
-    if (len > 0) {
-      const sin = Math.sin(cameraYaw);
-      const cos = Math.cos(cameraYaw);
-      const wx = (mx * cos - mz * sin) / len;
-      const wz = (mx * sin + mz * cos) / len;
-      const nx = state.x + wx * state.speed * dt;
-      const nz = state.z + wz * state.speed * dt;
-      const clamped = city.clampToCity(nx, nz, 2);
-      const fixed = resolveBuildingCollision(clamped.x, clamped.z, PLAYER.radius, city.colliders);
-      state.x = fixed.x;
-      state.z = fixed.z;
-      state.heading = Math.atan2(wx, wz);
-      state.walkPhase += dt * state.speed * 1.6;
+    const swing = moving ? Math.sin(this.walkPhase) * 0.7 : 0;
+    this.legL.rotation.x = swing;
+    this.legR.rotation.x = -swing;
+    if (this.punchTimer > 0) {
+      this.armR.rotation.x = -1.9 * Math.sin((this.punchTimer / 0.28) * Math.PI);
+    } else {
+      this.armL.rotation.x = -swing * 0.8;
+      this.armR.rotation.x = swing * 0.8;
     }
-    group.position.set(state.x, 0, state.z);
-    group.rotation.y = state.heading;
-    const swing = len > 0 ? Math.sin(state.walkPhase) * 0.55 : 0;
-    legL.rotation.x = swing;
-    legR.rotation.x = -swing;
-    armL.rotation.x = -swing * 0.7;
-    armR.rotation.x = swing * 0.7;
-    // Blink while invulnerable after being hit.
-    group.visible = state.invulnerable === 0 || Math.floor(state.invulnerable * 10) % 2 === 1;
+    this.group.position.copy(this.pos);
+    this.group.rotation.y = this.heading;
   }
 
-  function teleport(x, z, heading) {
-    state.x = x;
-    state.z = z;
-    if (heading !== undefined) state.heading = heading;
-    group.position.set(x, 0, z);
-    group.rotation.y = state.heading;
+  punch() {
+    if (this.punchCooldown > 0 || this.inCar) return false;
+    this.punchCooldown = 0.45;
+    this.punchTimer = 0.28;
+    return true;
   }
 
-  return {
-    state,
-    mesh: group,
-    update,
-    teleport,
-    position() {
-      return { x: state.x, z: state.z };
-    },
-  };
+  // Third-person camera: orbit behind the heading, drag to look around.
+  updateCamera(camera, dt) {
+    const yaw = this.camYaw;
+    const cx = this.pos.x - Math.sin(yaw) * this.camDist * Math.cos(this.camPitch);
+    const cz = this.pos.z - Math.cos(yaw) * this.camDist * Math.cos(this.camPitch);
+    const cy = 2.2 + Math.sin(this.camPitch) * this.camDist;
+    camera.position.x = SolmarUtil.lerp(camera.position.x, cx, Math.min(1, dt * 10));
+    camera.position.y = SolmarUtil.lerp(camera.position.y, cy, Math.min(1, dt * 10));
+    camera.position.z = SolmarUtil.lerp(camera.position.z, cz, Math.min(1, dt * 10));
+    camera.lookAt(this.pos.x, 1.6, this.pos.z);
+  }
+
+  // Chase camera for driving: behind the car, smoothing the yaw.
+  updateCarCamera(camera, car, dt) {
+    const back = 9.5, up = 4.2;
+    const fx = Math.sin(car.angle), fz = Math.cos(car.angle);
+    const tx = car.x - fx * back, tz = car.z - fz * back;
+    camera.position.x = SolmarUtil.lerp(camera.position.x, tx, Math.min(1, dt * 5));
+    camera.position.y = SolmarUtil.lerp(camera.position.y, up, Math.min(1, dt * 5));
+    camera.position.z = SolmarUtil.lerp(camera.position.z, tz, Math.min(1, dt * 5));
+    camera.lookAt(car.x + fx * 6, 1.4, car.z + fz * 6);
+  }
 }
